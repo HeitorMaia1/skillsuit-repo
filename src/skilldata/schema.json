@@ -1,0 +1,83 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://skillsuit/schema/skilldata-v1.json",
+  "title": "SkillData v1 (DRAFT)",
+  "$comment": "PLACEHOLDER skeleton created in Phase 1.7. The authoritative SkillData v1 contract is finalized in Phase 3.7 (docs/skilldata_v1.md). Field names, units, and required/optional status may change before v1 is locked.",
+  "description": "AI-training-ready motor-capture record: one trial of one subject performing one motion class, captured by the 4-IMU arm sleeve.",
+  "type": "object",
+  "required": ["schema_version", "session", "calibration", "imu_streams"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Format version tag, e.g. 'skilldata-v1'."
+    },
+    "session": {
+      "type": "object",
+      "description": "Per-trial metadata. motion_class is a first-class field.",
+      "required": ["subject_id", "motion_class", "trial_index", "sample_rate_hz"],
+      "properties": {
+        "subject_id": { "type": "string", "examples": ["S001"] },
+        "motion_class": {
+          "type": "string",
+          "description": "Motion label, e.g. reach, lift, wrist_rotate, throw."
+        },
+        "trial_index": { "type": "integer", "minimum": 0 },
+        "sample_rate_hz": { "type": "number", "examples": [200, 500] },
+        "timestamp_start_unix_us": { "type": "integer" },
+        "firmware_version": { "type": "string" },
+        "source": { "type": "string", "enum": ["synthetic", "hardware"] }
+      }
+    },
+    "calibration": {
+      "type": "object",
+      "description": "Calibration coefficients applied to this capture (per calibration_protocol.md).",
+      "properties": {
+        "gyro_bias_dps": {
+          "type": "object",
+          "description": "Per-sensor gyroscope bias (deg/s), keyed by sensor ID.",
+          "additionalProperties": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }
+        },
+        "accel_scale": {
+          "type": "object",
+          "description": "Per-sensor accelerometer scale factors, keyed by sensor ID.",
+          "additionalProperties": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }
+        },
+        "inter_imu_alignment_quat": {
+          "type": "object",
+          "description": "Per-sensor mounting-alignment quaternion [w,x,y,z] from the T-pose, keyed by sensor ID.",
+          "additionalProperties": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 }
+        }
+      }
+    },
+    "imu_streams": {
+      "type": "object",
+      "description": "Raw + fused per-IMU time series, keyed by sensor ID (S0, S2, S4, S5).",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["timestamp_us", "angular_velocity_dps", "linear_accel_g"],
+        "properties": {
+          "timestamp_us": { "type": "array", "items": { "type": "integer" } },
+          "angular_velocity_dps": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 } },
+          "linear_accel_g": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 } },
+          "quaternion": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 }, "description": "Fused orientation [w,x,y,z] per sample (added by the fusion stage)." },
+          "saturation_flag": { "type": "array", "items": { "type": "boolean" }, "description": "True where the gyro pinned at its full-scale range (D2 envelope)." }
+        }
+      }
+    },
+    "segment_kinematics": {
+      "type": "object",
+      "description": "Fused segment-level kinematics derived from relative IMU orientation (added by the fusion stage).",
+      "properties": {
+        "joint_angles_rad": {
+          "type": "object",
+          "description": "Recovered joint angles over time (shoulder from S0-S2, elbow from S2-S4, wrist from S4-S5)."
+        }
+      }
+    },
+    "phase_labels": {
+      "type": "array",
+      "description": "Per-timestep phase label vector.",
+      "items": { "type": "string", "enum": ["prep", "active", "settle"] }
+    }
+  }
+}

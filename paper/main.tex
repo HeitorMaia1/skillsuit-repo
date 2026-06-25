@@ -1,0 +1,60 @@
+% SkillSuit — secondary deliverable. Paper scaffolding only (Phase 1.4).
+% The product (capture -> AI-training-data pipeline) is the primary deliverable;
+% this paper is pursued only if time allows (Phase 7 / 10.7).
+\documentclass[11pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{siunitx}          % SI units, dimensional consistency
+\usepackage[numbers]{natbib}
+\usepackage{hyperref}
+
+\graphicspath{{figures/}}
+
+\title{Port-Hamiltonian Neural Networks for Wearable Capture of Human Motor Data}
+\author{Heitor Menin Maia}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+% Written last (Phase 7.6). One paragraph: problem, system, method, result.
+\end{abstract}
+
+\section{Introduction}\label{sec:intro}
+% Phase 7.6 (written last): problem, contributions, paper structure.
+
+\section{Background and Related Work}\label{sec:background}
+% Phase 7.1: Hamiltonian mechanics; HNNs; Port-Hamiltonian NNs; IMU motion
+% capture; motor data for AI/imitation learning. See paper/related_work.md (2.8).
+
+\section{Apparatus}\label{sec:apparatus}
+% Phase 7.2: 4-IMU placement (S0/S2/S4/S5), ESP32-S3 signal chain, USB-powered
+% tethered v0, sleeve build, the motion-agnostic capture system.
+
+\section{Methods}\label{sec:methods}
+% Phase 7.3: 2-DOF arm sim, synthetic IMU + noise/saturation model, motion-class
+% labeling, Madgwick/EKF fusion, HNN and pHNN, hyperparameters.
+
+\section{Experiments}\label{sec:experiments}
+% Phase 7.4: fusion validation; pendulum HNN; conservative-phase HNN;
+% full-motion pHNN. Splits, baselines, metrics.
+
+\section{Results}\label{sec:results}
+% Phase 7.5 (synthetic) + Phase 10.7 (real). Insert figures from paper/figures/.
+% \input or \includegraphics fusion_*, real_* as they are generated.
+
+\section{Discussion}\label{sec:discussion}
+% Limitations (D2 saturation envelope, soft-tissue motion, single subject/arm),
+% pivot condition if pHNN fails on real data.
+
+\section{Conclusion}\label{sec:conclusion}
+
+\bibliographystyle{plainnat}
+\bibliography{refs}
+
+\end{document}

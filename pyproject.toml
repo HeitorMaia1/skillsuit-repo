@@ -1,0 +1,46 @@
+[project]
+name = "skillsuit"
+version = "0.1.0"
+description = "Wearable motor-capture to AI-training-ready data pipeline, with a Port-Hamiltonian Neural Network modeling core."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Heitor Menin Maia" }]
+keywords = ["imu", "sensor-fusion", "hamiltonian-neural-network", "motor-data", "wearable"]
+
+# Phase 1.2 dependency set. Pinned floors, not exact versions; `uv sync` writes uv.lock.
+dependencies = [
+  "numpy>=1.26",
+  "scipy>=1.13",
+  "torch>=2.3",
+  "pybullet>=3.2.6",
+  "matplotlib>=3.8",
+  "pandas>=2.2",
+  "jupyter>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.5",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# Only skilldata exists at the Phase 1 skeleton stage. fusion/ (Phase 4),
+# models/ (Phase 5), and capture/ (Phase 9) get added to this list as they land.
+[tool.hatch.build.targets.wheel]
+packages = ["src/skilldata"]
+
+[tool.uv]
+# uv manages the project venv; `uv sync` installs the locked dependency set.
+package = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.pytest.ini_options]
+testpaths = ["src", "firmware/tests"]

@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+
+# Data: directory structure is tracked via .gitkeep; large captures are excluded
+# until the dataset release (Phase 10.2).
+data/raw/**
+data/processed/**
+!data/**/.gitkeep
+
+# LaTeX build artifacts
+paper/*.aux
+paper/*.log
+paper/*.out
+paper/*.fls
+paper/*.fdb_latexmk
+paper/*.synctex.gz
+paper/main.pdf
