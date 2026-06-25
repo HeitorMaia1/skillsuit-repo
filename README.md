@@ -39,10 +39,10 @@ Notebooks are exploratory; `make all` reproduces every figure non-interactively 
 
 | Path | What |
 |------|------|
-| `src/skilldata/` | The SkillData v1 format + capture/export pipeline — the core deliverable. |
-| `src/fusion/` | Sensor fusion (Madgwick, EKF). *(Phase 4)* |
-| `src/models/` | HNN and pHNN modeling core. *(Phase 5)* |
-| `src/capture/` | Host-side serial receiver/decoder for real captures. *(Phase 9)* |
+| `skilldata/` | The SkillData v1 format + capture/export pipeline — the core deliverable. |
+| `fusion/` | Sensor fusion (Madgwick, EKF). *(Phase 4)* |
+| `models/` | HNN and pHNN modeling core. *(Phase 5)* |
+| `capture/` | Host-side serial receiver/decoder for real captures. *(Phase 9)* |
 | `firmware/` | ESP32-S3 capture firmware + host-side encoder tests. |
 | `notebooks/` | Exploratory analysis and figure generation. |
 | `paper/` | LaTeX manuscript (secondary deliverable) + figures. |
