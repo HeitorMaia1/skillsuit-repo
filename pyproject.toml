@@ -26,6 +26,7 @@ dependencies = [
 dev = [
   "pytest>=8.0",
   "ruff>=0.5",
+  "jsonschema>=4.0",
 ]
 # Optional contact-physics engine; not needed for the analytic 2-DOF/pendulum pipeline.
 sim = [
@@ -52,3 +53,6 @@ target-version = "py312"
 
 [tool.pytest.ini_options]
 testpaths = ["skilldata", "tests", "firmware/tests"]
+# Flat layout: put the repo root on sys.path so `sim` and `skilldata` source packages import
+# from the working dir during tests (pytest otherwise only adds the test file's own directory).
+pythonpath = ["."]

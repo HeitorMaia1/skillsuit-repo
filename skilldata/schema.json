@@ -1,20 +1,21 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://skillsuit/schema/skilldata-v1.json",
-  "title": "SkillData v1 (DRAFT)",
-  "$comment": "PLACEHOLDER skeleton created in Phase 1.7. The authoritative SkillData v1 contract is finalized in Phase 3.7 (docs/skilldata_v1.md). Field names, units, and required/optional status may change before v1 is locked.",
-  "description": "AI-training-ready motor-capture record: one trial of one subject performing one motion class, captured by the 4-IMU arm sleeve.",
+  "title": "SkillData v1",
+  "$comment": "Locked in Phase 3.7 (authoritative prose: docs/skilldata_v1.md). Two layers: the captured human-motion BASE LAYER (session, calibration, imu_streams, segment_kinematics, phase_labels) is robot-independent and always present; the ROBOT-READY LAYER (retarget) is a derived view that maps the motion onto one or more target robot morphologies via inverse kinematics, and is optional.",
+  "description": "AI-training-ready motor-capture record: one trial of one subject performing one motion class, captured by the 4-IMU arm sleeve. Carries the raw/fused human kinematics plus, optionally, the motion retargeted onto target robots.",
   "type": "object",
   "required": ["schema_version", "session", "calibration", "imu_streams"],
   "properties": {
     "schema_version": {
       "type": "string",
-      "description": "Format version tag, e.g. 'skilldata-v1'."
+      "const": "skilldata-v1",
+      "description": "Format version tag."
     },
     "session": {
       "type": "object",
       "description": "Per-trial metadata. motion_class is a first-class field.",
-      "required": ["subject_id", "motion_class", "trial_index", "sample_rate_hz"],
+      "required": ["subject_id", "motion_class", "trial_index", "sample_rate_hz", "source"],
       "properties": {
         "subject_id": { "type": "string", "examples": ["S001"] },
         "motion_class": {
@@ -22,6 +23,7 @@
           "description": "Motion label, e.g. reach, lift, wrist_rotate, throw."
         },
         "trial_index": { "type": "integer", "minimum": 0 },
+        "n_samples": { "type": "integer", "minimum": 0, "description": "Number of timesteps in every per-sample array." },
         "sample_rate_hz": { "type": "number", "examples": [200, 500] },
         "timestamp_start_unix_us": { "type": "integer" },
         "firmware_version": { "type": "string" },
@@ -30,7 +32,7 @@
     },
     "calibration": {
       "type": "object",
-      "description": "Calibration coefficients applied to this capture (per calibration_protocol.md).",
+      "description": "Calibration coefficients applied to this capture (per calibration_protocol.md). May be empty for synthetic captures.",
       "properties": {
         "gyro_bias_dps": {
           "type": "object",
@@ -51,14 +53,15 @@
     },
     "imu_streams": {
       "type": "object",
-      "description": "Raw + fused per-IMU time series, keyed by sensor ID (S0, S2, S4, S5).",
+      "description": "Raw + fused per-IMU time series, keyed by sensor ID (S0, S2, S4, S5). The 2-DOF synthetic source populates S2 and S4; S0/S5 arrive with the 3D model (3.2) and the hardware capture (Phase 9).",
+      "minProperties": 1,
       "additionalProperties": {
         "type": "object",
         "required": ["timestamp_us", "angular_velocity_dps", "linear_accel_g"],
         "properties": {
           "timestamp_us": { "type": "array", "items": { "type": "integer" } },
-          "angular_velocity_dps": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 } },
-          "linear_accel_g": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 } },
+          "angular_velocity_dps": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }, "description": "Gyroscope [x,y,z] deg/s per sample." },
+          "linear_accel_g": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }, "description": "Accelerometer specific force [x,y,z] in units of g per sample." },
           "quaternion": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 }, "description": "Fused orientation [w,x,y,z] per sample (added by the fusion stage)." },
           "saturation_flag": { "type": "array", "items": { "type": "boolean" }, "description": "True where the gyro pinned at its full-scale range (D2 envelope)." }
         }
@@ -66,11 +69,12 @@
     },
     "segment_kinematics": {
       "type": "object",
-      "description": "Fused segment-level kinematics derived from relative IMU orientation (added by the fusion stage).",
+      "description": "Fused segment-level kinematics derived from relative IMU orientation. Robot-independent.",
       "properties": {
         "joint_angles_rad": {
           "type": "object",
-          "description": "Recovered joint angles over time (shoulder from S0-S2, elbow from S2-S4, wrist from S4-S5)."
+          "description": "Recovered joint angles over time, keyed by joint (shoulder from S0-S2, elbow from S2-S4, wrist from S4-S5). Each value is a per-sample array.",
+          "additionalProperties": { "type": "array", "items": { "type": "number" } }
         }
       }
     },
@@ -78,6 +82,40 @@
       "type": "array",
       "description": "Per-timestep phase label vector.",
       "items": { "type": "string", "enum": ["prep", "active", "settle"] }
+    },
+    "retarget": {
+      "type": "object",
+      "description": "ROBOT-READY LAYER (optional, derived). The captured motion mapped onto one or more target robot morphologies via inverse kinematics. Keyed by robot id. Because the base layer is robot-independent, a new robot is added by re-running retargeting on the same record — no re-capture. Reference target = an open humanoid (Unitree G1/H1); Tesla Optimus is the named aspirational target the format accepts once a URDF exists.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["target_robot", "method", "joint_names", "joint_trajectory_rad"],
+        "properties": {
+          "target_robot": {
+            "type": "object",
+            "required": ["name", "dof"],
+            "properties": {
+              "name": { "type": "string", "examples": ["unitree_g1", "planar_2link_demo", "tesla_optimus"] },
+              "dof": { "type": "integer", "minimum": 1 },
+              "urdf_ref": { "type": "string", "description": "Path/URL/identifier of the URDF that defines this morphology." },
+              "link_lengths_m": { "type": "array", "items": { "type": "number" }, "description": "Link lengths used for the IK, if applicable." }
+            }
+          },
+          "method": { "type": "string", "examples": ["analytic_2link", "ikpy_urdf"], "description": "Retargeting / IK method used." },
+          "joint_names": { "type": "array", "items": { "type": "string" } },
+          "joint_trajectory_rad": {
+            "type": "array",
+            "description": "Per-sample robot joint angles [n_samples x dof], radians.",
+            "items": { "type": "array", "items": { "type": "number" } }
+          },
+          "target_position_m": {
+            "type": "array",
+            "description": "The base-layer end-effector path the IK tracked, per sample (e.g. the wrist position).",
+            "items": { "type": "array", "items": { "type": "number" } }
+          },
+          "ik_residual_m": { "type": "array", "items": { "type": "number" }, "description": "Per-sample Euclidean IK position error (metres)." },
+          "reachable_flag": { "type": "array", "items": { "type": "boolean" }, "description": "False where the target fell outside the robot workspace and was clamped." }
+        }
+      }
     }
   }
 }

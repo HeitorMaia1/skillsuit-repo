@@ -2271,6 +2271,7 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "jsonschema" },
     { name = "pytest" },
     { name = "ruff" },
 ]
@@ -2280,6 +2281,7 @@ sim = [
 
 [package.metadata]
 requires-dist = [
+    { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4.0" },
     { name = "jupyter", specifier = ">=1.0" },
     { name = "matplotlib", specifier = ">=3.8" },
     { name = "numpy", specifier = ">=1.26" },
