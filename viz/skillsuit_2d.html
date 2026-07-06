@@ -1,0 +1,354 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SkillSuit · Motion → Data</title>
+<style>
+  :root {
+    --ground: #0A0E17;
+    --panel: #131A28;
+    --panel-2: #0F1522;
+    --ink: #E7EDF8;
+    --muted: #8593AD;
+    --faint: #55617C;
+    --grid: #1C2334;
+    --line: #232C40;
+    --human: #35D0C0;   /* captured signal — S2 / human arm */
+    --human-2: #6AB8FF; /* second human sensor — S4 */
+    --robot: #FFB454;   /* retargeted robot output */
+    --prep: #4C5B7A;
+    --active: #35D0C0;
+    --settle: #C69B5A;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background:
+      radial-gradient(1200px 700px at 78% -10%, #12203a 0%, rgba(18,32,58,0) 55%),
+      var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    padding: clamp(14px, 3vw, 32px);
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; }
+
+  /* header */
+  .cap-header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px 24px; margin-bottom: 22px; }
+  .brand { display: flex; align-items: baseline; gap: 12px; }
+  .brand h1 { font-size: clamp(1.5rem, 3.4vw, 2.15rem); font-weight: 640; letter-spacing: -0.02em; margin: 0; text-wrap: balance; }
+  .brand .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--human); box-shadow: 0 0 12px 1px var(--human); flex: none; transform: translateY(-3px); }
+  .tagline { color: var(--muted); font-size: 0.95rem; margin: 4px 0 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; }
+  .chip { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.02em; color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 9px; white-space: nowrap; }
+  .chip b { color: var(--ink); font-weight: 600; }
+
+  /* layout */
+  .grid { display: grid; grid-template-columns: 1.05fr 1fr; gap: 16px; align-items: stretch; }
+  @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+  .card { background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%); border: 1px solid var(--line); border-radius: 12px; padding: 16px; min-width: 0; }
+  .card > .eyebrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+  .eyebrow .lbl { font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--faint); }
+
+  /* stage */
+  #stage { width: 100%; height: auto; display: block; border-radius: 8px; background: radial-gradient(80% 80% at 40% 30%, #0e1626 0%, #0a0f1a 100%); }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 12px; font-size: 0.8rem; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .swatch { width: 14px; height: 3px; border-radius: 2px; flex: none; }
+  .swatch.d { width: 9px; height: 9px; border-radius: 50%; }
+
+  /* phase strip */
+  .phase { margin-top: 14px; }
+  .phase-track { display: grid; grid-template-columns: 43fr 37fr 40fr; gap: 4px; }
+  .seg { font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; text-align: center; padding: 6px 4px; border-radius: 5px; color: var(--faint); background: var(--panel-2); border: 1px solid var(--line); transition: color .15s, background .15s, border-color .15s; }
+  .seg.on { color: var(--ground); font-weight: 700; }
+  .seg.on.prep { background: var(--prep); border-color: var(--prep); color: #dfe6f5; }
+  .seg.on.active { background: var(--active); border-color: var(--active); }
+  .seg.on.settle { background: var(--settle); border-color: var(--settle); }
+
+  /* charts */
+  .charts { display: flex; flex-direction: column; gap: 14px; height: 100%; }
+  .chart-block { display: flex; flex-direction: column; gap: 8px; }
+  .chart-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .chart-head .name { font-size: 0.9rem; font-weight: 600; }
+  .chart-head .unit { font-family: var(--mono); font-size: 0.72rem; color: var(--faint); }
+  .readouts { display: flex; gap: 16px; font-family: var(--mono); font-size: 0.78rem; }
+  .readouts .r { color: var(--muted); }
+  .readouts .r b { font-weight: 600; font-variant-numeric: tabular-nums; }
+  canvas.chart { width: 100%; height: auto; display: block; }
+
+  /* transport */
+  .transport { display: flex; align-items: center; gap: 14px; margin-top: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; flex-wrap: wrap; }
+  .play { appearance: none; cursor: pointer; border: 1px solid var(--human); color: var(--ground); background: var(--human); font-family: var(--mono); font-size: 0.8rem; font-weight: 700; letter-spacing: 0.04em; padding: 8px 16px; border-radius: 7px; min-width: 92px; }
+  .play:hover { filter: brightness(1.08); }
+  .play:focus-visible, .scrub:focus-visible, select:focus-visible { outline: 2px solid var(--human-2); outline-offset: 2px; }
+  .scrub { flex: 1 1 220px; min-width: 160px; accent-color: var(--human); cursor: pointer; height: 4px; }
+  .tclock { font-family: var(--mono); font-size: 0.82rem; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .tclock b { color: var(--ink); }
+  .speed { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 0.75rem; color: var(--faint); }
+  select { background: var(--panel-2); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font-family: var(--mono); font-size: 0.75rem; cursor: pointer; }
+
+  .note { color: var(--muted); font-size: 0.86rem; margin: 18px 2px 0; max-width: 68ch; }
+  .note b { color: var(--ink); font-weight: 600; }
+</style>
+
+<div class="wrap">
+  <header class="cap-header">
+    <div>
+      <div class="brand"><span class="dot"></span><h1>SkillSuit</h1></div>
+      <p class="tagline">Live capture playback — watch human motion become AI-training data, then a robot.</p>
+    </div>
+    <div class="chips" id="chips"></div>
+  </header>
+
+  <div class="grid">
+    <section class="card">
+      <div class="eyebrow"><span class="lbl">Capture stage — planar arm</span><span class="lbl" id="frameTag">frame 0</span></div>
+      <canvas id="stage"></canvas>
+      <div class="legend">
+        <span><i class="swatch" style="background:var(--human)"></i> You — captured</span>
+        <span><i class="swatch" style="background:var(--robot)"></i> Robot — retargeted</span>
+        <span><i class="swatch d" style="background:var(--human)"></i> S2 · S4 sensors</span>
+        <span><i class="swatch d" style="background:#fff;opacity:.55"></i> wrist path</span>
+      </div>
+      <div class="phase">
+        <div class="eyebrow"><span class="lbl">Motion phase</span></div>
+        <div class="phase-track">
+          <div class="seg prep" data-p="prep">prep</div>
+          <div class="seg active" data-p="active">active</div>
+          <div class="seg settle" data-p="settle">settle</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="eyebrow"><span class="lbl">Sensor telemetry — SkillData v1 base layer</span></div>
+      <div class="charts">
+        <div class="chart-block">
+          <div class="chart-head"><span class="name">Gyroscope</span><span class="unit">deg/s · Z axis</span></div>
+          <div class="readouts">
+            <span class="r" style="color:var(--human)">S2 <b id="v_s2g">0</b></span>
+            <span class="r" style="color:var(--human-2)">S4 <b id="v_s4g">0</b></span>
+          </div>
+          <canvas id="chGyro" class="chart"></canvas>
+        </div>
+        <div class="chart-block">
+          <div class="chart-head"><span class="name">Accelerometer</span><span class="unit">|a| · g</span></div>
+          <div class="readouts">
+            <span class="r" style="color:var(--human)">S2 <b id="v_s2a">1.00</b></span>
+            <span class="r" style="color:var(--human-2)">S4 <b id="v_s4a">1.00</b></span>
+          </div>
+          <canvas id="chAcc" class="chart"></canvas>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="transport">
+    <button class="play" id="play" aria-label="Play or pause">▶ Play</button>
+    <input class="scrub" id="scrub" type="range" min="0" max="199" value="0" aria-label="Scrub timeline" />
+    <span class="tclock"><b id="tnow">0.00</b> / <span id="tend">1.99</span> s</span>
+    <label class="speed">speed
+      <select id="speed">
+        <option value="0.5">0.5×</option>
+        <option value="1" selected>1×</option>
+        <option value="2">2×</option>
+      </select>
+    </label>
+  </div>
+
+  <p class="note"><b>What you're seeing.</b> One real recording from the pipeline: a smooth reach. The
+  cyan arm is the captured human motion; the two dots on it are the S2 (upper-arm) and S4 (forearm)
+  motion sensors. The amber arm is the same motion <b>retargeted</b> onto a robot — note both arms put
+  the hand on the identical path (white trace) while bending their elbows differently. The right panel
+  is the exact sensor data the encoder writes to a SkillData v1 file as this motion plays.</p>
+</div>
+
+<script>
+const D = {"meta": {"subject": "S001", "motion": "reach", "fs": 500.0, "n_full": 1000, "n_frames": 200, "schema_version": "skilldata-v1"}, "t": [0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1, 0.11, 0.12, 0.13, 0.14, 0.15, 0.16, 0.17, 0.18, 0.19, 0.2, 0.21, 0.22, 0.23, 0.24, 0.25, 0.26, 0.27, 0.28, 0.29, 0.3, 0.31, 0.32, 0.33, 0.34, 0.35, 0.36, 0.37, 0.38, 0.39, 0.4, 0.41, 0.42, 0.43, 0.44, 0.45, 0.46, 0.47, 0.48, 0.49, 0.5, 0.51, 0.52, 0.53, 0.54, 0.55, 0.56, 0.57, 0.58, 0.59, 0.6, 0.61, 0.62, 0.63, 0.64, 0.65, 0.66, 0.67, 0.68, 0.69, 0.7, 0.71, 0.72, 0.73, 0.74, 0.75, 0.76, 0.77, 0.78, 0.79, 0.8, 0.81, 0.82, 0.83, 0.84, 0.85, 0.86, 0.87, 0.88, 0.89, 0.9, 0.91, 0.92, 0.93, 0.94, 0.95, 0.96, 0.97, 0.98, 0.99, 1.0, 1.01, 1.02, 1.03, 1.04, 1.05, 1.06, 1.07, 1.08, 1.09, 1.1, 1.11, 1.12, 1.13, 1.14, 1.15, 1.16, 1.17, 1.18, 1.19, 1.2, 1.21, 1.22, 1.23, 1.24, 1.25, 1.26, 1.27, 1.28, 1.29, 1.3, 1.31, 1.32, 1.33, 1.34, 1.35, 1.36, 1.37, 1.38, 1.39, 1.4, 1.41, 1.42, 1.43, 1.44, 1.45, 1.46, 1.47, 1.48, 1.49, 1.5, 1.51, 1.52, 1.53, 1.54, 1.55, 1.56, 1.57, 1.58, 1.59, 1.6, 1.61, 1.62, 1.63, 1.64, 1.65, 1.66, 1.67, 1.68, 1.69, 1.7, 1.71, 1.72, 1.73, 1.74, 1.75, 1.76, 1.77, 1.78, 1.79, 1.8, 1.81, 1.82, 1.83, 1.84, 1.85, 1.86, 1.87, 1.88, 1.89, 1.9, 1.91, 1.92, 1.93, 1.94, 1.95, 1.96, 1.97, 1.98, 1.99], "phase": ["prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "prep", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "active", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle", "settle"], "human": {"l1": 0.3, "l2": 0.25, "th1": [0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17453, 0.17455, 0.17466, 0.17497, 0.17554, 0.17647, 0.17781, 0.17964, 0.182, 0.18496, 0.18854, 0.1928, 0.19776, 0.20344, 0.20988, 0.21709, 0.22508, 0.23385, 0.24341, 0.25375, 0.26487, 0.27675, 0.28939, 0.30276, 0.31685, 0.33162, 0.34705, 0.36311, 0.37976, 0.39697, 0.4147, 0.43291, 0.45155, 0.47059, 0.48998, 0.50966, 0.5296, 0.54974, 0.57003, 0.59042, 0.61087, 0.63131, 0.6517, 0.67199, 0.69213, 0.71207, 0.73176, 0.75114, 0.77018, 0.78882, 0.80703, 0.82476, 0.84197, 0.85863, 0.87468, 0.89011, 0.90488, 0.91897, 0.93234, 0.94498, 0.95686, 0.96798, 0.97832, 0.98788, 0.99665, 1.00464, 1.01185, 1.01829, 1.02397, 1.02893, 1.03319, 1.03677, 1.03973, 1.04209, 1.04392, 1.04526, 1.04619, 1.04676, 1.04707, 1.04718, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472, 1.0472], "th2": [0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34907, 0.34909, 0.34925, 0.34967, 0.35048, 0.35178, 0.35366, 0.35621, 0.35952, 0.36366, 0.36868, 0.37464, 0.38158, 0.38954, 0.39856, 0.40865, 0.41983, 0.43211, 0.44549, 0.45997, 0.47553, 0.49217, 0.50987, 0.52859, 0.54831, 0.56898, 0.59059, 0.61307, 0.63638, 0.66047, 0.6853, 0.71079, 0.73689, 0.76355, 0.79068, 0.81824, 0.84616, 0.87435, 0.90276, 0.93131, 0.95993, 0.98855, 1.0171, 1.04551, 1.07371, 1.10162, 1.12918, 1.15632, 1.18297, 1.20907, 1.23457, 1.25939, 1.28348, 1.3068, 1.32928, 1.35088, 1.37156, 1.39127, 1.40999, 1.42769, 1.44433, 1.4599, 1.47437, 1.48775, 1.50003, 1.51121, 1.5213, 1.53032, 1.53828, 1.54523, 1.55118, 1.5562, 1.56034, 1.56365, 1.5662, 1.56809, 1.56938, 1.57019, 1.57061, 1.57077, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708, 1.5708]}, "robot": {"a1": 0.35, "a2": 0.35, "q1": [-0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35282, -0.35279, -0.35262, -0.35217, -0.35132, -0.34995, -0.34795, -0.34525, -0.34174, -0.33737, -0.33208, -0.3258, -0.31849, -0.31013, -0.30069, -0.29015, -0.2785, -0.26576, -0.25191, -0.23699, -0.22102, -0.20402, -0.18602, -0.16708, -0.14723, -0.12653, -0.10502, -0.08277, -0.05984, -0.03628, -0.01216, 0.01245, 0.03748, 0.06287, 0.08855, 0.11445, 0.14051, 0.16665, 0.19282, 0.21894, 0.24495, 0.27079, 0.2964, 0.32172, 0.34669, 0.37125, 0.39536, 0.41896, 0.44201, 0.46445, 0.48625, 0.50736, 0.52774, 0.54736, 0.5662, 0.58421, 0.60138, 0.61768, 0.63309, 0.6476, 0.6612, 0.67388, 0.68563, 0.69646, 0.70637, 0.71537, 0.72347, 0.7307, 0.73707, 0.74261, 0.74737, 0.75136, 0.75465, 0.75729, 0.75932, 0.76081, 0.76184, 0.76248, 0.76282, 0.76294, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296, 0.76296], "q2": [1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37171, 1.37172, 1.37175, 1.37184, 1.37202, 1.37229, 1.3727, 1.37325, 1.37398, 1.37489, 1.37601, 1.37736, 1.37896, 1.38083, 1.38299, 1.38546, 1.38826, 1.39142, 1.39495, 1.39889, 1.40325, 1.40805, 1.41332, 1.41908, 1.42534, 1.43212, 1.43943, 1.44729, 1.45569, 1.46466, 1.47418, 1.48425, 1.49487, 1.50602, 1.51769, 1.52986, 1.54251, 1.55559, 1.56909, 1.58297, 1.59718, 1.61169, 1.62644, 1.64139, 1.65649, 1.67169, 1.68693, 1.70217, 1.71733, 1.73239, 1.74726, 1.76192, 1.77629, 1.79034, 1.80402, 1.81727, 1.83006, 1.84235, 1.8541, 1.86527, 1.87583, 1.88577, 1.89506, 1.90368, 1.91162, 1.91888, 1.92545, 1.93133, 1.93655, 1.9411, 1.94501, 1.94832, 1.95104, 1.95322, 1.95491, 1.95616, 1.95701, 1.95754, 1.95782, 1.95793, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795, 1.95795]}, "imu": {"S2_gyro": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.29, 1.11, 2.44, 4.23, 6.44, 9.02, 11.95, 15.19, 18.69, 22.43, 26.37, 30.48, 34.73, 39.08, 43.52, 48.0, 52.51, 57.01, 61.49, 65.92, 70.27, 74.53, 78.68, 82.69, 86.55, 90.24, 93.74, 97.04, 100.13, 103.0, 105.62, 108.0, 110.12, 111.97, 113.55, 114.86, 115.87, 116.6, 117.04, 117.19, 117.04, 116.6, 115.87, 114.86, 113.55, 111.97, 110.12, 108.0, 105.62, 103.0, 100.13, 97.04, 93.74, 90.24, 86.55, 82.69, 78.68, 74.53, 70.27, 65.92, 61.49, 57.01, 52.51, 48.0, 43.52, 39.08, 34.73, 30.48, 26.37, 22.43, 18.69, 15.19, 11.95, 9.02, 6.44, 4.23, 2.44, 1.11, 0.29, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "S4_gyro": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.69, 2.67, 5.86, 10.15, 15.45, 21.66, 28.69, 36.45, 44.86, 53.83, 63.29, 73.15, 83.35, 93.8, 104.44, 115.2, 126.02, 136.83, 147.58, 158.2, 168.65, 178.88, 188.82, 198.45, 207.71, 216.56, 224.97, 232.9, 240.32, 247.19, 253.49, 259.2, 264.29, 268.74, 272.53, 275.65, 278.09, 279.85, 280.9, 281.25, 280.9, 279.85, 278.09, 275.65, 272.53, 268.74, 264.29, 259.2, 253.49, 247.19, 240.32, 232.9, 224.97, 216.56, 207.71, 198.45, 188.82, 178.88, 168.65, 158.2, 147.58, 136.83, 126.02, 115.2, 104.44, 93.8, 83.35, 73.15, 63.29, 53.83, 44.86, 36.45, 28.69, 21.66, 15.45, 10.15, 5.86, 2.67, 0.69, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "S2_acc": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0148, 1.0285, 1.0411, 1.0527, 1.0632, 1.0726, 1.0811, 1.0885, 1.095, 1.1006, 1.1052, 1.1089, 1.1118, 1.1138, 1.1149, 1.1153, 1.1148, 1.1136, 1.1117, 1.109, 1.1057, 1.1016, 1.097, 1.0917, 1.0859, 1.0796, 1.0728, 1.0655, 1.0578, 1.0498, 1.0416, 1.0331, 1.0244, 1.0156, 1.0068, 0.998, 0.9894, 0.9809, 0.9727, 0.9647, 0.9572, 0.9501, 0.9434, 0.9374, 0.9318, 0.927, 0.9227, 0.9191, 0.9161, 0.9138, 0.9121, 0.9111, 0.9106, 0.9106, 0.9112, 0.9122, 0.9136, 0.9154, 0.9174, 0.9198, 0.9223, 0.9249, 0.9277, 0.9306, 0.9336, 0.9366, 0.9397, 0.9429, 0.9461, 0.9494, 0.9529, 0.9566, 0.9605, 0.9647, 0.9692, 0.9742, 0.9797, 0.9858, 0.9926, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0], "S4_acc": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0559, 1.1079, 1.1559, 1.1998, 1.2397, 1.2755, 1.3073, 1.335, 1.3587, 1.3784, 1.3941, 1.4059, 1.4138, 1.4178, 1.418, 1.4144, 1.4072, 1.3963, 1.3819, 1.364, 1.3428, 1.3183, 1.2907, 1.2601, 1.2267, 1.1907, 1.1523, 1.1118, 1.0694, 1.0256, 0.9807, 0.9351, 0.8894, 0.8443, 0.8003, 0.7583, 0.7191, 0.6837, 0.6532, 0.6284, 0.6102, 0.5993, 0.5959, 0.5999, 0.6108, 0.6277, 0.6498, 0.6759, 0.7049, 0.736, 0.7681, 0.8007, 0.833, 0.8646, 0.8951, 0.9241, 0.9512, 0.9765, 0.9995, 1.0204, 1.0389, 1.055, 1.0687, 1.0799, 1.0888, 1.0953, 1.0994, 1.1013, 1.101, 1.0986, 1.0943, 1.0881, 1.0802, 1.0709, 1.0604, 1.0489, 1.0367, 1.0242, 1.0119, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]}};
+
+// ---- geometry ------------------------------------------------------------
+const N = D.meta.n_frames;
+const H = D.human, R = D.robot;
+function humanJoints(i) {
+  const t1 = H.th1[i], t2 = H.th2[i];
+  const el = [H.l1 * Math.cos(t1), H.l1 * Math.sin(t1)];
+  const wr = [el[0] + H.l2 * Math.cos(t1 + t2), el[1] + H.l2 * Math.sin(t1 + t2)];
+  const s2 = [0.5 * H.l1 * Math.cos(t1), 0.5 * H.l1 * Math.sin(t1)];
+  const s4 = [el[0] + 0.5 * H.l2 * Math.cos(t1 + t2), el[1] + 0.5 * H.l2 * Math.sin(t1 + t2)];
+  return { sh: [0, 0], el, wr, s2, s4 };
+}
+function robotJoints(i) {
+  const q1 = R.q1[i], q2 = R.q2[i];
+  const el = [R.a1 * Math.cos(q1), R.a1 * Math.sin(q1)];
+  const wr = [el[0] + R.a2 * Math.cos(q1 + q2), el[1] + R.a2 * Math.sin(q1 + q2)];
+  return { sh: [0, 0], el, wr };
+}
+// world bounds over the whole motion (+ padding)
+let bx0 = 0, bx1 = 0, by0 = 0, by1 = 0;
+for (let i = 0; i < N; i++) {
+  const h = humanJoints(i), r = robotJoints(i);
+  for (const p of [h.sh, h.el, h.wr, r.el, r.wr]) {
+    bx0 = Math.min(bx0, p[0]); bx1 = Math.max(bx1, p[0]);
+    by0 = Math.min(by0, p[1]); by1 = Math.max(by1, p[1]);
+  }
+}
+const padW = 0.06;
+bx0 -= padW; bx1 += padW; by0 -= padW; by1 += padW;
+
+// ---- canvas helpers ------------------------------------------------------
+function fitCanvas(cv, cssH) {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const cssW = cv.clientWidth || cv.parentElement.clientWidth;
+  cv.width = Math.round(cssW * dpr);
+  cv.height = Math.round(cssH * dpr);
+  cv.style.height = cssH + "px";
+  const ctx = cv.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, w: cssW, h: cssH };
+}
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+// ---- stage rendering -----------------------------------------------------
+const stage = document.getElementById("stage");
+function drawStage(f) {
+  const { ctx, w, h } = fitCanvas(stage, Math.max(300, Math.round(stage.clientWidth * 0.72)));
+  // world->screen: fit bounds preserving aspect, y up
+  const sx = w / (bx1 - bx0), sy = h / (by1 - by0), s = Math.min(sx, sy) * 0.94;
+  const ox = (w - s * (bx1 - bx0)) / 2, oy = (h - s * (by1 - by0)) / 2;
+  const X = (x) => ox + (x - bx0) * s;
+  const Y = (y) => h - (oy + (y - by0) * s);
+
+  ctx.clearRect(0, 0, w, h);
+  // grid
+  ctx.strokeStyle = css("--grid"); ctx.lineWidth = 1;
+  for (let gx = Math.ceil(bx0 / 0.1) * 0.1; gx <= bx1; gx += 0.1) { ctx.beginPath(); ctx.moveTo(X(gx), 0); ctx.lineTo(X(gx), h); ctx.stroke(); }
+  for (let gy = Math.ceil(by0 / 0.1) * 0.1; gy <= by1; gy += 0.1) { ctx.beginPath(); ctx.moveTo(0, Y(gy)); ctx.lineTo(w, Y(gy)); ctx.stroke(); }
+
+  // wrist path trace (both arms share it)
+  ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 1.5; ctx.setLineDash([2, 4]);
+  ctx.beginPath();
+  for (let i = 0; i <= f; i++) { const p = humanJoints(i).wr; if (i === 0) ctx.moveTo(X(p[0]), Y(p[1])); else ctx.lineTo(X(p[0]), Y(p[1])); }
+  ctx.stroke(); ctx.setLineDash([]);
+
+  const h1 = humanJoints(f), r1 = robotJoints(f);
+  const link = (a, b, color, wdt) => { ctx.strokeStyle = color; ctx.lineWidth = wdt; ctx.lineCap = "round"; ctx.beginPath(); ctx.moveTo(X(a[0]), Y(a[1])); ctx.lineTo(X(b[0]), Y(b[1])); ctx.stroke(); };
+  const joint = (p, color, rad) => { ctx.fillStyle = color; ctx.beginPath(); ctx.arc(X(p[0]), Y(p[1]), rad, 0, 7); ctx.fill(); };
+
+  // robot arm (drawn first, behind)
+  link(r1.sh, r1.el, css("--robot"), 7); link(r1.el, r1.wr, css("--robot"), 7);
+  joint(r1.el, css("--robot"), 5);
+  // human arm
+  link(h1.sh, h1.el, css("--human"), 7); link(h1.el, h1.wr, css("--human"), 7);
+  joint(h1.el, css("--human"), 5);
+  // shoulder (shared root)
+  joint([0, 0], "#c9d4e8", 6);
+  // sensors on the human arm, with glow scaled by motion
+  const glow = Math.min(1, Math.abs(D.imu.S4_gyro[f]) / 281);
+  for (const [p, id] of [[h1.s2, "S2"], [h1.s4, "S4"]]) {
+    ctx.save();
+    ctx.shadowColor = css("--human"); ctx.shadowBlur = 6 + glow * 14;
+    joint(p, "#eafffb", 4.5 + glow * 1.5);
+    ctx.restore();
+    ctx.fillStyle = css("--muted"); ctx.font = "11px " + css("--mono");
+    ctx.fillText(id, X(p[0]) + 8, Y(p[1]) - 6);
+  }
+  // wrist marker
+  joint(h1.wr, "#ffffff", 4);
+}
+
+// ---- line charts ---------------------------------------------------------
+function drawChart(cv, series, f, yRange) {
+  const { ctx, w, h } = fitCanvas(cv, 120);
+  const padL = 34, padR = 8, padT = 8, padB = 16;
+  const iw = w - padL - padR, ih = h - padT - padB;
+  const [y0, y1] = yRange;
+  const X = (i) => padL + (i / (N - 1)) * iw;
+  const Y = (v) => padT + (1 - (v - y0) / (y1 - y0)) * ih;
+  ctx.clearRect(0, 0, w, h);
+
+  // gridlines + y ticks
+  ctx.strokeStyle = css("--grid"); ctx.fillStyle = css("--faint");
+  ctx.font = "10px " + css("--mono"); ctx.textAlign = "right"; ctx.textBaseline = "middle"; ctx.lineWidth = 1;
+  const ticks = 3;
+  for (let k = 0; k <= ticks; k++) {
+    const v = y0 + (k / ticks) * (y1 - y0), yy = Y(v);
+    ctx.beginPath(); ctx.moveTo(padL, yy); ctx.lineTo(w - padR, yy); ctx.stroke();
+    ctx.fillText(v.toFixed(v >= 10 || v <= -10 ? 0 : 1), padL - 5, yy);
+  }
+  // playhead
+  ctx.strokeStyle = "rgba(255,255,255,0.18)"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(X(f), padT); ctx.lineTo(X(f), h - padB); ctx.stroke();
+
+  // series: full faint line + solid up to playhead + endpoint dot
+  for (const s of series) {
+    ctx.strokeStyle = s.color; ctx.globalAlpha = 0.22; ctx.lineWidth = 1.25;
+    ctx.beginPath();
+    for (let i = 0; i < N; i++) { const xx = X(i), yy = Y(s.data[i]); i ? ctx.lineTo(xx, yy) : ctx.moveTo(xx, yy); }
+    ctx.stroke();
+    ctx.globalAlpha = 1; ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    for (let i = 0; i <= f; i++) { const xx = X(i), yy = Y(s.data[i]); i ? ctx.lineTo(xx, yy) : ctx.moveTo(xx, yy); }
+    ctx.stroke();
+    ctx.fillStyle = s.color; ctx.beginPath(); ctx.arc(X(f), Y(s.data[f]), 2.8, 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ---- fixed y-ranges from the data ---------------------------------------
+const gAll = D.imu.S2_gyro.concat(D.imu.S4_gyro);
+const aAll = D.imu.S2_acc.concat(D.imu.S4_acc);
+const gRange = [Math.min(...gAll) - 10, Math.max(...gAll) + 20];
+const aRange = [Math.floor(Math.min(...aAll) * 10) / 10 - 0.05, Math.ceil(Math.max(...aAll) * 10) / 10 + 0.05];
+
+// ---- readouts / phase ----------------------------------------------------
+const el = (id) => document.getElementById(id);
+function render(f) {
+  drawStage(f);
+  drawChart(el("chGyro"), [{ data: D.imu.S2_gyro, color: css("--human") }, { data: D.imu.S4_gyro, color: css("--human-2") }], f, gRange);
+  drawChart(el("chAcc"), [{ data: D.imu.S2_acc, color: css("--human") }, { data: D.imu.S4_acc, color: css("--human-2") }], f, aRange);
+  el("v_s2g").textContent = D.imu.S2_gyro[f].toFixed(0);
+  el("v_s4g").textContent = D.imu.S4_gyro[f].toFixed(0);
+  el("v_s2a").textContent = D.imu.S2_acc[f].toFixed(3);
+  el("v_s4a").textContent = D.imu.S4_acc[f].toFixed(3);
+  el("tnow").textContent = D.t[f].toFixed(2);
+  el("frameTag").textContent = "frame " + f;
+  el("scrub").value = f;
+  const ph = D.phase[f];
+  document.querySelectorAll(".seg").forEach((s) => s.classList.toggle("on", s.dataset.p === ph));
+}
+
+// ---- metadata chips ------------------------------------------------------
+el("chips").innerHTML = [
+  ["subject", D.meta.subject], ["motion", D.meta.motion], ["rate", D.meta.fs + " Hz"],
+  ["samples", D.meta.n_full], ["format", D.meta.schema_version],
+].map(([k, v]) => `<span class="chip">${k} <b>${v}</b></span>`).join("");
+el("tend").textContent = D.t[N - 1].toFixed(2);
+el("scrub").max = N - 1;
+
+// ---- playback ------------------------------------------------------------
+let frame = 0, playing = false, speed = 1, last = 0, acc = 0;
+const FRAME_MS = 1000 / D.meta.fs * (D.meta.n_full / N); // real time per displayed frame
+function loop(ts) {
+  if (!playing) return;
+  if (!last) last = ts;
+  acc += (ts - last) * speed; last = ts;
+  while (acc >= FRAME_MS) { acc -= FRAME_MS; frame = (frame + 1) % N; }
+  render(frame);
+  requestAnimationFrame(loop);
+}
+function setPlaying(p) {
+  playing = p; el("play").textContent = p ? "❚❚ Pause" : "▶ Play";
+  if (p) { last = 0; acc = 0; requestAnimationFrame(loop); }
+}
+el("play").addEventListener("click", () => setPlaying(!playing));
+el("scrub").addEventListener("input", (e) => { frame = +e.target.value; render(frame); });
+el("speed").addEventListener("change", (e) => { speed = +e.target.value; });
+window.addEventListener("resize", () => render(frame));
+
+render(0);
+const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+if (!reduce) setPlaying(true);
+</script>
