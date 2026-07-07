@@ -22,8 +22,8 @@ from pathlib import Path
 import numpy as np
 
 from . import SCHEMA_VERSION
-
-G = 9.81  # standard gravity [m/s^2], matches sim.arm
+from .ingest.base import assemble_base_layer, phase_labels_from_speed
+from .ingest.sim import planar_imu_streams
 
 _SCHEMA_PATH = Path(__file__).with_name("schema.json")
 
@@ -99,23 +99,6 @@ def two_link_ik(xy, a1, a2):
 # --------------------------------------------------------------------------- #
 # Base layer — build a SkillData v1 record from a simulated trial
 # --------------------------------------------------------------------------- #
-def _phase_labels(th1d, th2d, active_frac=0.01):
-    """Per-sample prep/active/settle labels from joint-speed magnitude.
-
-    'active' where the combined joint speed exceeds ``active_frac`` of its peak; everything
-    before the first active sample is 'prep', everything after the last is 'settle'.
-    """
-    speed = np.abs(np.asarray(th1d, float)) + np.abs(np.asarray(th2d, float))
-    peak = speed.max()
-    active = speed > active_frac * peak if peak > 0 else np.zeros_like(speed, bool)
-    labels = np.where(active, "active", "prep").astype(object)
-    if active.any():
-        last = np.flatnonzero(active)[-1]
-        post = np.arange(len(speed)) > last
-        labels[post] = "settle"
-    return labels.tolist()
-
-
 def build_record(
     arm,
     t,
@@ -134,47 +117,27 @@ def build_record(
 ):
     """Assemble the BASE LAYER of a SkillData v1 record from a planar-arm trial.
 
-    Maps the planar IMU synthesis into the hardware-shaped 3-axis fields: gyro as
-    ``[0, 0, deg/s]`` about the out-of-plane axis, accel as ``[ax, ay, 0]`` in units of g.
-    Populates the instrumented sensors S2 (upper arm) and S4 (forearm).
+    Thin wrapper over the ingest layer: the planar arm is the reference capture source
+    (``skilldata.ingest.PlanarSimAdapter``). Maps the planar IMU synthesis into the hardware-shaped
+    3-axis fields and populates the instrumented sensors S2 (upper arm) and S4 (forearm).
     """
-    t = np.asarray(t, float)
-    n = t.size
-    ts_us = np.round(t * 1e6).astype(np.int64)
-    imu = arm.ideal_imu(th1, th1d, th1dd, th2, th2d, th2dd)
-
-    streams = {}
-    for sid in ("S2", "S4"):
-        gyro_z_dps = np.rad2deg(np.asarray(imu[sid]["gyro_z"], float))
-        accel = np.asarray(imu[sid]["accel"], float)  # (n, 2) m/s^2
-        gyro_vec = np.stack([np.zeros(n), np.zeros(n), gyro_z_dps], axis=-1)
-        accel_g = np.stack([accel[:, 0] / G, accel[:, 1] / G, np.zeros(n)], axis=-1)
-        streams[sid] = {
-            "timestamp_us": ts_us.tolist(),
-            "angular_velocity_dps": gyro_vec.tolist(),
-            "linear_accel_g": accel_g.tolist(),
-        }
-
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "session": {
-            "subject_id": subject_id,
-            "motion_class": motion_class,
-            "trial_index": int(trial_index),
-            "n_samples": int(n),
-            "sample_rate_hz": float(sample_rate_hz),
-            "source": source,
-        },
-        "calibration": {},
-        "imu_streams": streams,
-        "segment_kinematics": {
+    streams = planar_imu_streams(arm, t, th1, th1d, th1dd, th2, th2d, th2dd)
+    speed = np.abs(np.asarray(th1d, float)) + np.abs(np.asarray(th2d, float))
+    return assemble_base_layer(
+        subject_id=subject_id,
+        motion_class=motion_class,
+        trial_index=trial_index,
+        sample_rate_hz=sample_rate_hz,
+        imu_streams=streams,
+        segment_kinematics={
             "joint_angles_rad": {
                 "shoulder": np.asarray(th1, float).tolist(),
                 "elbow": np.asarray(th2, float).tolist(),
             }
         },
-        "phase_labels": _phase_labels(th1d, th2d),
-    }
+        phase_labels=phase_labels_from_speed(speed),
+        source=source,
+    )
 
 
 # --------------------------------------------------------------------------- #
