@@ -176,6 +176,28 @@ def human_arm_7dof(l_upper: float = 0.30, l_fore: float = 0.25, l_hand: float = 
     )
 
 
+def reference_humanoid_7dof(l_upper: float = 0.28, l_fore: float = 0.26, l_hand: float = 0.10) -> Arm3D:
+    """A 7-DOF humanoid *robot* arm (retarget target). Same joint structure as the human arm but
+    robot proportions (so retargeting is a genuine, non-identity mapping), and no sensors.
+
+    Stand-in for an open humanoid (Unitree G1) until a real URDF is loaded into an Arm3D chain; the
+    end-effector is the ``wrist_dev_hand`` joint. Kinematics are identical in form to a URDF chain, so
+    swapping in a parsed URDF later is a drop-in.
+    """
+    return Arm3D(
+        segments=(
+            Segment(axis=(0, 0, 1), link=(0, 0, 0), name="sh_yaw"),
+            Segment(axis=(0, 1, 0), link=(0, 0, 0), name="sh_pitch"),
+            Segment(axis=(1, 0, 0), link=(l_upper, 0, 0), name="sh_roll_upper"),
+            Segment(axis=(0, 0, 1), link=(l_fore, 0, 0), name="elbow_fore"),
+            Segment(axis=(1, 0, 0), link=(0, 0, 0), name="forearm_pron"),
+            Segment(axis=(0, 0, 1), link=(0, 0, 0), name="wrist_flex"),
+            Segment(axis=(0, 1, 0), link=(l_hand, 0, 0), name="wrist_dev_hand"),
+        ),
+        g_world=(0.0, 0.0, -G),
+    )
+
+
 if __name__ == "__main__":
     from .arm import min_jerk
 
