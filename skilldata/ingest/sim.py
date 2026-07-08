@@ -13,6 +13,7 @@ from __future__ import annotations
 import numpy as np
 
 from sim.arm import G
+from sim.sensor import apply_to_streams
 
 from .base import IngestAdapter, assemble_base_layer, phase_labels_from_speed
 
@@ -44,17 +45,20 @@ class PlanarSimAdapter(IngestAdapter):
 
     source_name = "sim_planar"
 
-    def __init__(self, arm, t, th1, th1d, th1dd, th2, th2d, th2dd, sample_rate_hz):
+    def __init__(self, arm, t, th1, th1d, th1dd, th2, th2d, th2dd, sample_rate_hz, sensor_model=None):
         self.arm = arm
         self.t = np.asarray(t, float)
         self.j1 = (th1, th1d, th1dd)
         self.j2 = (th2, th2d, th2dd)
         self.sample_rate_hz = sample_rate_hz
+        self.sensor_model = sensor_model
 
     def to_base_layer(self, *, subject_id, motion_class, trial_index):
         th1, th1d, _ = self.j1
         th2, th2d, _ = self.j2
         streams = planar_imu_streams(self.arm, self.t, *self.j1, *self.j2)
+        if self.sensor_model is not None:
+            streams = apply_to_streams(streams, self.sensor_model, 1.0 / self.sample_rate_hz)
         speed = np.abs(th1d) + np.abs(th2d)
         return assemble_base_layer(
             subject_id=subject_id, motion_class=motion_class, trial_index=trial_index,
@@ -74,7 +78,7 @@ class Arm3DSimAdapter(IngestAdapter):
 
     source_name = "sim_arm3d"
 
-    def __init__(self, arm3d, t, qs, qds, qdds, sample_rate_hz, joint_names=None):
+    def __init__(self, arm3d, t, qs, qds, qdds, sample_rate_hz, joint_names=None, sensor_model=None):
         self.arm3d = arm3d
         self.t = np.asarray(t, float)
         self.qs = np.asarray(qs, float)
@@ -82,6 +86,7 @@ class Arm3DSimAdapter(IngestAdapter):
         self.qdds = np.asarray(qdds, float)
         self.sample_rate_hz = sample_rate_hz
         self.joint_names = joint_names or [s.name for s in arm3d.segments]
+        self.sensor_model = sensor_model
 
     def to_base_layer(self, *, subject_id, motion_class, trial_index):
         ts_us = np.round(self.t * 1e6).astype(np.int64).tolist()
@@ -93,6 +98,8 @@ class Arm3DSimAdapter(IngestAdapter):
                 "angular_velocity_dps": np.rad2deg(np.asarray(s["gyro"], float)).tolist(),
                 "linear_accel_g": (np.asarray(s["accel"], float) / G).tolist(),
             }
+        if self.sensor_model is not None:
+            streams = apply_to_streams(streams, self.sensor_model, 1.0 / self.sample_rate_hz)
         angles = {name: self.qs[:, i].tolist() for i, name in enumerate(self.joint_names)}
         speed = np.abs(self.qds).sum(axis=1)
         return assemble_base_layer(
