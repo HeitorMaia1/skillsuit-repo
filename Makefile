@@ -18,9 +18,8 @@ all: synthetic fusion models figures  ## full synthetic pipeline end-to-end
 sync:  ## install the locked dependency set into the uv-managed venv
 	uv sync
 
-synthetic:  ## Phase 3: generate synthetic motion library + export SkillData v1
-	$(PY) -m skilldata.generate_synthetic --out data/raw/synthetic
-	$(PY) -m skilldata.export --in data/raw/synthetic --out data/processed
+synthetic:  ## Phase 3: generate + export the synthetic SkillData v1 dataset (task 3.9)
+	$(PY) -m skilldata.generate_synthetic --out data/processed --n 1000
 
 fusion:  ## Phase 4: run Madgwick + EKF, compute RMS orientation error
 	$(PY) -m fusion.run_validation --data data/processed --figures paper/figures
