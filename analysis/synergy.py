@@ -37,7 +37,10 @@ The three axes
    doi:10.1177/1758573217728711, n=352 healthy adults, goniometer, **active** ROM of the dominant
    arm: **flexion 146 deg, extension -2 deg, pronation 80 deg, supination 87 deg**. Those two joints
    (elbow, forearm) are the ones this arm model maps one-to-one onto a measured human joint, so they
-   are the ones scored. See `ROM_UNVERIFIED` below for why the shoulder and wrist are not.
+   are the ones scored. Task 3.16 later added the shoulder and wrist from the AAOS reference
+   standard, so the table now scores six of seven joints; `sh_yaw` stays unsourced because mapping
+   a frontal-plane abduction limit onto an azimuth axis means inventing a convention. Limits and
+   their provenance live in `sim.limits`, which is the single table this module reads.
 
 3. **Coordination.** Can a person move seven joints *independently*? This is the axis the other two
    miss, and it is the one the motor-control literature is about. Sanger (2000), *Human Arm
@@ -76,17 +79,19 @@ Run as ``uv run python -m analysis.synergy``.
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import numpy as np
 
 from sim.dynamics import human_arm_7dof_dynamics
+from sim.limits import JOINT_LIMITS, JOINT_ORDER, UNSOURCED
 
 from .identifiability import build_Y
 
 DATA = Path(__file__).resolve().parents[1] / "data" / "processed" / "dynamics"
 
-JOINTS = ["sh_yaw", "sh_pitch", "sh_roll", "elbow", "fore_pron", "wrist_flex", "wrist_dev"]
+JOINTS = list(JOINT_ORDER)
 
 # Fleisig et al. (1995), doi:10.1177/036354659502300218, 26 highly skilled adult pitchers.
 # The three torque magnitudes quoted verbatim in that paper's abstract. Used as a single scalar
@@ -97,19 +102,14 @@ FLEISIG_SHOULDER_IR_NM = 67.0
 FLEISIG_SHOULDER_HABD_NM = 97.0
 FLEISIG_CEILING_NM = FLEISIG_SHOULDER_HABD_NM  # the largest value the paper reports
 
-# Zwerus et al. (2017), doi:10.1177/1758573217728711, n=352, ACTIVE ROM, dominant arm.
-# Only the two joints this model maps one-to-one onto a measured human joint.
-ROM_DEG = {
-    "elbow": (-2.0, 146.0),      # extension -2, flexion 146
-    "fore_pron": (-87.0, 80.0),  # supination 87, pronation 80
-}
-
-# Deliberately NOT scored. Shoulder yaw/pitch/roll and wrist flexion/deviation limits are easy to
-# find as textbook numbers, but this pass could not verify any of them verbatim from a source it
-# actually read, and the standing rule is that "I recall" is not a citation. Aizawa et al. (2013),
-# doi:10.3109/09638288.2012.731133, measured exactly these (n=20, electromagnetic tracking) and is
-# the right source; its numbers are behind a paywall and are not reproduced here on trust.
-ROM_UNVERIFIED = ["sh_yaw", "sh_pitch", "sh_roll", "wrist_flex", "wrist_dev"]
+# Range-of-motion limits now live in `sim.limits`, which is the single sourced table and carries
+# the tier and citation of every number. When this module was written only the elbow and forearm had
+# a limit at all; task 3.16 added the shoulder and wrist from the AAOS reference standard, leaving
+# `sh_yaw` unsourced because mapping a frontal-plane abduction limit onto an azimuth axis would mean
+# inventing a convention. The violation counts printed below are therefore still a LOWER BOUND.
+ROM_DEG = {name: (math.degrees(lim.lo), math.degrees(lim.hi))
+           for name, lim in JOINT_LIMITS.items() if lim is not None}
+ROM_UNVERIFIED = list(UNSOURCED)
 
 
 def load_class(motion_class, max_trials=100):
@@ -225,10 +225,11 @@ def main():
     print()
     print("=" * 96)
     print("2. RANGE OF MOTION — does it exceed the joint's travel?")
-    print("   Ceiling: Zwerus 2017 (n=352) active ROM, dominant arm. Elbow and forearm only;")
-    print(f"   not scored for {', '.join(ROM_UNVERIFIED)} (no verbatim source read — see module).")
+    print("   Ceiling: sim.limits — tier A (Zwerus 2017, n=352) for elbow and forearm, tier B "
+          "(AAOS) for shoulder and wrist.")
+    print(f"   Not scored: {', '.join(ROM_UNVERIFIED)} — so every count below is a LOWER BOUND.")
     print("=" * 96)
-    print(f"{'class':14s} {'joint':12s} {'min deg':>9s} {'max deg':>9s} {'limit':>16s} {'':>6s}")
+    print(f"{'class':14s} {'joint':16s} {'min deg':>9s} {'max deg':>9s} {'limit':>16s} {'':>6s}")
     for mc in classes:
         for j, nm in enumerate(JOINTS):
             if nm not in ROM_DEG:
@@ -236,7 +237,7 @@ def main():
             deg = np.rad2deg(data[mc]["q"][:, j])
             lo, hi = ROM_DEG[nm]
             bad = deg.min() < lo - 1e-9 or deg.max() > hi + 1e-9
-            print(f"{mc:14s} {nm:12s} {deg.min():9.1f} {deg.max():9.1f} "
+            print(f"{mc:14s} {nm:16s} {deg.min():9.1f} {deg.max():9.1f} "
                   f"{f'[{lo:.0f}, {hi:.0f}]':>16s} {'OVER' if bad else 'ok':>6s}")
 
     print()
@@ -257,10 +258,10 @@ def main():
 
     print()
     print("   peak |qdot| per joint, deg/s")
-    print(f"   {'class':14s} " + " ".join(f"{nm:>11s}" for nm in JOINTS))
+    print(f"   {'class':14s} " + " ".join(f"{nm:>15s}" for nm in JOINTS))
     for mc in classes:
         v = np.rad2deg(np.abs(data[mc]["qd"]).max(axis=0))
-        print(f"   {mc:14s} " + " ".join(f"{x:11.1f}" for x in v))
+        print(f"   {mc:14s} " + " ".join(f"{x:15.1f}" for x in v))
 
     print()
     print("=" * 96)

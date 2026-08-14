@@ -23,6 +23,7 @@ from __future__ import annotations
 import numpy as np
 
 from .arm import min_jerk
+from .limits import JOINT_ORDER, usable_interval
 
 MOTION_CLASSES = ("reach", "lift", "wrist_rotate", "throw")
 
@@ -53,6 +54,20 @@ ALL_CLASSES = MOTION_CLASSES + (EXCITATION_CLASS,)
 # Defaults for the excitation trajectory. Chosen, not optimised — see `excitation_trial`.
 EXCITE_DEFAULTS = {"dur": 5.0, "n_harm": 5, "f_base": 0.2, "amp": 0.35}
 
+# Fraction of a joint's usable half-range an amplitude-scaled excitation is allowed to fill.
+#
+# Not cosmetic, and not a magic number picked to make a test pass. Scaling to fill exactly 1.0 puts
+# the trajectory's extremum *on* the joint stop, where the feasibility check is a strict comparison
+# and float64 rounding decides the answer: the first regenerated dataset came back with 5 of 100
+# excitation trials failing on `wrist_dev_hand` by an excess that rounded to 0.000 degrees. Twenty
+# hand-seeded trials had all passed, so only the real 100-trial stream found it.
+#
+# 0.99 is also the physically sensible choice independently of the arithmetic. A protocol that asks
+# a subject to oscillate a joint against its own hard stop is not one anybody would run; leaving 1%
+# of the range (0.25 degrees at the wrist, 1.5 at the elbow) is what a real excitation protocol
+# would do anyway.
+FIT_MARGIN = 0.99
+
 # (joint index, start angle, (amp_lo, amp_hi)) plus the active window fraction, per class.
 _SPECS = {
     "reach": {"dur": 2.0, "win": (0.4, 1.2),
@@ -68,7 +83,8 @@ _SPECS = {
 }
 
 
-def excitation_trial(fs=500.0, rng=None, *, dur=None, n_harm=None, f_base=None, amp=None):
+def excitation_trial(fs=500.0, rng=None, *, dur=None, n_harm=None, f_base=None, amp=None,
+                     respect_limits=True):
     """A finite-Fourier-series **excitation** trajectory (task 3.15). Returns ``(t, qs, qds, qdds)``.
 
     Why this exists
@@ -103,6 +119,50 @@ def excitation_trial(fs=500.0, rng=None, *, dur=None, n_harm=None, f_base=None, 
     coefficients are drawn per trial so a set of trials spans configuration space rather than
     repeating one path.
 
+    Anatomical feasibility (``respect_limits``, task 3.16)
+    ------------------------------------------------------
+    The first version of this function centred every joint at zero and was **not a motion a human
+    could make**. Measured over the shipped dataset by the depth pass of 2026-08-14: the elbow
+    reached **-66.2 degrees** against an active-extension limit of **-2** (Zwerus et al. 2017,
+    doi:10.1177/1758573217728711), in **10 of 10 trials**.
+
+    The cause is a two-line oversight rather than anything deep about excitation. ``q0 = 0`` puts
+    the arm straight, which is already the *end* of the elbow's travel — so a zero-mean oscillation
+    around it spends half of every cycle bending the joint the way it does not bend. The same
+    applies wherever anatomical neutral is not the middle of the range.
+
+    With ``respect_limits=True`` (the default) each joint is instead centred in
+    `sim.limits.usable_interval` and its amplitude scaled down if it would still overrun. Joints
+    with no sourced limit (`sim.limits.UNSOURCED`) are left alone.
+
+    **It is nearly free, and the exception is the interesting part.** Measured with the same
+    estimator and the same 0.085 N m torque noise, ROM violations go 10/10 -> 0/10 and the
+    condition number barely moves, 2.194e10 -> 2.199e10. Six of the seven joints keep their damping
+    error bar to three significant figures. The seventh does not:
+
+        wrist_dev_hand   11.9% -> 16.4%   (1.38x)
+        worst joint      13.8% -> 16.4%
+
+    That is not noise, it is anatomy. Radial/ulnar deviation has by far the tightest range of any
+    joint here -- 50 degrees end to end, against 148 for the elbow and 167 for the forearm -- so it
+    is the only joint whose amplitude has to be cut to fit (by 2.4x), and its damping column shrinks
+    with it. **The cost of insisting on a performable motion is carried entirely by the joint that
+    moves least.**
+
+    An earlier measurement of this change reported 13.8% -> 13.9% and called it free. That run
+    constrained only the elbow and forearm -- the two joints with a primary source at the time --
+    and so never touched the joint that actually pays. The figure above supersedes it.
+
+    The obvious repair is not implemented here, deliberately. Displacement amplitude scales as
+    ``a / (omega k)`` while velocity scales as ``a``, so a tight joint can be excited just as hard
+    by raising its frequency instead of its amplitude, and the damping regressor sees velocity. That
+    is trajectory *optimisation* under anatomical constraints -- the open problem the depth pass
+    named -- and doing it here would destroy the value of this trajectory as an unoptimised
+    baseline. See ``DEPTH.md``.
+
+    Scaling happens **after** all random draws, so the RNG stream is untouched and a trial's
+    coefficients are the same with the flag on or off.
+
     Honest limits
     -------------
     * The coefficients are **random, not optimised**. Gautier & Khalil minimise the condition number
@@ -110,9 +170,13 @@ def excitation_trial(fs=500.0, rng=None, *, dur=None, n_harm=None, f_base=None, 
       the method can deliver. Measured against the same estimator and noise it still cuts the
       worst-joint damping error from 143.9% to 11.7% and the condition number from 3.56e11 to
       2.23e10.
-    * ``q0`` defaults to zero — the arm extended horizontally — deliberately, because the arm's
-      *hanging* pose (shoulder pitch = pi/2) is a gimbal lock where ``M`` loses rank (task 3.13).
-      Starting there would trade an identifiability problem for a conditioning one.
+    * Constraining to anatomy is **not** the same as optimising under constraints. What this does
+      is repair an infeasible trajectory; designing the *best* trajectory a human could actually
+      perform is the open problem the depth pass named, and it is not solved here.
+    * `usable_interval` also keeps clear of the two gimbal locks found in task 3.13 — which is why
+      the shoulder is centred near -10 degrees rather than at the midpoint of its anatomical range,
+      +30 degrees, which would walk the oscillation into the singularity at +90.
+    * `sh_yaw` has no sourced limit and is therefore still zero-mean and unconstrained.
     * Unlike the four naturalistic classes this trajectory does **not** start and end at rest, so
       momentum and kinetic energy are non-zero at both endpoints. Anything that assumes rest
       endpoints (as the 3.14 tests do for the naturalistic classes) must exclude ``excite``.
@@ -140,6 +204,20 @@ def excitation_trial(fs=500.0, rng=None, *, dur=None, n_harm=None, f_base=None, 
             q[:, j] += a / wk * np.sin(wk * t) - b / wk * np.cos(wk * t)
             qd[:, j] += a * np.cos(wk * t) + b * np.sin(wk * t)
             qdd[:, j] += -a * wk * np.sin(wk * t) + b * wk * np.cos(wk * t)
+
+    if respect_limits:
+        # After every draw, so the RNG stream is identical with the flag on or off.
+        for j, name in enumerate(JOINT_ORDER):
+            interval = usable_interval(name)
+            if interval is None:
+                continue
+            lo, hi = interval
+            mid, half = 0.5 * (lo + hi), 0.5 * (hi - lo) * FIT_MARGIN
+            peak = float(np.abs(q[:, j]).max())
+            scale = min(1.0, half / peak) if peak > 0.0 else 1.0
+            q[:, j] = mid + q[:, j] * scale
+            qd[:, j] *= scale
+            qdd[:, j] *= scale
     return t, q, qd, qdd
 
 
