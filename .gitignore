@@ -22,3 +22,6 @@ paper/*.fls
 paper/*.fdb_latexmk
 paper/*.synctex.gz
 paper/main.pdf
+
+# stray run logs — the real output is paper/figures/fusion_validation.json
+*.log
