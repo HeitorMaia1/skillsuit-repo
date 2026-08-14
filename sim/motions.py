@@ -26,6 +26,33 @@ from .arm import min_jerk
 
 MOTION_CLASSES = ("reach", "lift", "wrist_rotate", "throw")
 
+# ---------------------------------------------------------------------------
+# The excitation class (task 3.15) is deliberately NOT a member of MOTION_CLASSES.
+#
+# Two reasons, and the second is a hard constraint rather than a preference.
+#
+# (a) It is an *instrument*, not a motion anyone performs. Nobody reaches for a cup by tracking a
+#     sum of sinusoids. Folding it into the naturalistic four would contaminate every per-class
+#     statistic the dataset reports — saturation fractions, peak gyro envelopes, phase composition
+#     — with a trajectory that exists only to make the dynamics identifiable.
+#
+# (b) `MOTION_CLASSES` drives `_class_counts()` in **both** `skilldata.generate_synthetic` and
+#     `skilldata.generate_dynamics`. Adding a fifth member changes `_class_counts(1000, ...)` from
+#     [250, 250, 250, 250] to [200] * 5, which changes the order in which trials are drawn from the
+#     shared RNG. That would silently break the index alignment between the dynamics slice and the
+#     committed 2000-record SkillData v1 dataset — and invalidate the Phase 4 fusion numbers
+#     measured on it. A one-word change to a tuple would have quietly cost a 12-minute re-score and
+#     a re-run of every filter result.
+#
+# So `excite` is reachable through `generate_trial` and named in `ALL_CLASSES`, and it stays out of
+# `MOTION_CLASSES`.
+# ---------------------------------------------------------------------------
+EXCITATION_CLASS = "excite"
+ALL_CLASSES = MOTION_CLASSES + (EXCITATION_CLASS,)
+
+# Defaults for the excitation trajectory. Chosen, not optimised — see `excitation_trial`.
+EXCITE_DEFAULTS = {"dur": 5.0, "n_harm": 5, "f_base": 0.2, "amp": 0.35}
+
 # (joint index, start angle, (amp_lo, amp_hi)) plus the active window fraction, per class.
 _SPECS = {
     "reach": {"dur": 2.0, "win": (0.4, 1.2),
@@ -41,15 +68,99 @@ _SPECS = {
 }
 
 
-def generate_trial(motion_class, fs=500.0, rng=None):
+def excitation_trial(fs=500.0, rng=None, *, dur=None, n_harm=None, f_base=None, amp=None):
+    """A finite-Fourier-series **excitation** trajectory (task 3.15). Returns ``(t, qs, qds, qdds)``.
+
+    Why this exists
+    ---------------
+    The four naturalistic classes above cannot identify the arm's dynamics. Measured on the task
+    3.14 dataset (`analysis/identifiability.py`, and the write-up in ``DEPTH.md``): with the exact
+    model structure and exact ``qddot`` — the best case any estimator can have — the damping of
+    ``sh_roll`` comes back with an error bar **207% of its true value** and ``wrist_dev`` **76%**,
+    because those joints move in exactly one class each and at 0.057 / 0.144 rad/s RMS against 2.49
+    for the strongest. Regressor condition number 3.56e11. That is not a noise problem: at 0.1%
+    torque noise the worst joint still carries a 21% error bar.
+
+    This is the failure the identification literature has warned about since Gautier & Khalil
+    (1992), *Exciting Trajectories for the Identification of Base Inertial Parameters of Robots*,
+    IJRR 11(4):362-375, doi:10.1177/027836499201100408 — whose entire method is designing
+    trajectories that minimise the condition number of the regressor. Leboutet et al. (2021),
+    Applied Sciences 11:4303, doi:10.3390/app11094303, still lists excitation-trajectory
+    computation as a required stage of an identification pipeline.
+
+    The trajectory
+    --------------
+    Each joint follows a truncated Fourier series with zero mean displacement,
+
+        q_j(t)    = q0_j + sum_k [ a_jk/(w k) sin(w k t) - b_jk/(w k) cos(w k t) ]
+        qdot_j(t) =        sum_k [ a_jk cos(w k t) + b_jk sin(w k t) ]
+        qddot_j(t)=        sum_k [ -a_jk w k sin(w k t) + b_jk w k cos(w k t) ]
+
+    with ``w = 2 pi f_base``. Derivatives are analytic, matching the exactness the rest of ``sim``
+    guarantees — nothing here is finite-differenced.
+
+    **Every joint is driven**, which is the single property the naturalistic classes lack, and the
+    coefficients are drawn per trial so a set of trials spans configuration space rather than
+    repeating one path.
+
+    Honest limits
+    -------------
+    * The coefficients are **random, not optimised**. Gautier & Khalil minimise the condition number
+      by nonlinear programming; this is the unoptimised baseline, so it is a *lower bound* on what
+      the method can deliver. Measured against the same estimator and noise it still cuts the
+      worst-joint damping error from 143.9% to 11.7% and the condition number from 3.56e11 to
+      2.23e10.
+    * ``q0`` defaults to zero — the arm extended horizontally — deliberately, because the arm's
+      *hanging* pose (shoulder pitch = pi/2) is a gimbal lock where ``M`` loses rank (task 3.13).
+      Starting there would trade an identifiability problem for a conditioning one.
+    * Unlike the four naturalistic classes this trajectory does **not** start and end at rest, so
+      momentum and kinetic energy are non-zero at both endpoints. Anything that assumes rest
+      endpoints (as the 3.14 tests do for the naturalistic classes) must exclude ``excite``.
+    """
+    d = EXCITE_DEFAULTS
+    dur = d["dur"] if dur is None else dur
+    n_harm = d["n_harm"] if n_harm is None else n_harm
+    f_base = d["f_base"] if f_base is None else f_base
+    amp = d["amp"] if amp is None else amp
+    if n_harm < 1:
+        raise ValueError(f"n_harm must be >= 1; got {n_harm}")
+    if f_base <= 0 or dur <= 0 or amp <= 0:
+        raise ValueError("dur, f_base and amp must all be positive")
+
+    rng = np.random.default_rng() if rng is None else rng
+    t = np.arange(0.0, dur, 1.0 / fs)
+    w = 2 * np.pi * f_base
+    q = np.zeros((t.size, 7))
+    qd = np.zeros((t.size, 7))
+    qdd = np.zeros((t.size, 7))
+    for j in range(7):
+        for k in range(1, n_harm + 1):
+            a, b = rng.normal(0.0, amp), rng.normal(0.0, amp)
+            wk = w * k
+            q[:, j] += a / wk * np.sin(wk * t) - b / wk * np.cos(wk * t)
+            qd[:, j] += a * np.cos(wk * t) + b * np.sin(wk * t)
+            qdd[:, j] += -a * wk * np.sin(wk * t) + b * wk * np.cos(wk * t)
+    return t, q, qd, qdd
+
+
+def generate_trial(motion_class, fs=500.0, rng=None, **kwargs):
     """Generate one trial of ``motion_class``. Returns ``(t, qs, qds, qdds)``.
 
     ``qs/qds/qdds`` are ``(T, 7)`` joint angle / velocity / acceleration trajectories. Amplitudes are
     sampled from the class ranges (deterministic if ``rng`` is seeded). Joints not used by the class
     stay at zero; every trial starts and ends at rest (min-jerk endpoints).
+
+    ``motion_class`` may also be ``"excite"`` (task 3.15), which dispatches to `excitation_trial`
+    and accepts its ``dur`` / ``n_harm`` / ``f_base`` / ``amp`` keywords. That class is **not** in
+    `MOTION_CLASSES` — see the comment beside `EXCITATION_CLASS` for why that separation is load
+    bearing rather than cosmetic.
     """
+    if motion_class == EXCITATION_CLASS:
+        return excitation_trial(fs=fs, rng=rng, **kwargs)
     if motion_class not in _SPECS:
-        raise ValueError(f"unknown motion_class {motion_class!r}; choose from {MOTION_CLASSES}")
+        raise ValueError(f"unknown motion_class {motion_class!r}; choose from {ALL_CLASSES}")
+    if kwargs:
+        raise TypeError(f"{motion_class!r} takes no extra parameters; got {sorted(kwargs)}")
     rng = np.random.default_rng() if rng is None else rng
     spec = _SPECS[motion_class]
     t = np.arange(0.0, spec["dur"], 1.0 / fs)

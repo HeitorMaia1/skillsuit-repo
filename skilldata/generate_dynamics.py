@@ -62,8 +62,9 @@ from pathlib import Path
 
 import numpy as np
 
+from analysis.identifiability import damping_error_bars
 from sim.dynamics import DE_LEVA_MALE, human_arm_7dof_dynamics
-from sim.motions import MOTION_CLASSES, generate_trial
+from sim.motions import ALL_CLASSES, EXCITATION_CLASS, MOTION_CLASSES, generate_trial
 
 from .generate_synthetic import SUBJECT_ID, _class_counts
 
@@ -75,6 +76,28 @@ FORMAT_VERSION = "skilldata-dynamics-v1"
 # the physiological value. Whatever is here is what 5.9 is scored against, so it goes in the
 # manifest.
 DEFAULT_DAMPING = (0.080, 0.080, 0.050, 0.050, 0.020, 0.020, 0.020)
+
+# Excitation trials are drawn from their own RNG stream so their count can change without
+# perturbing the naturalistic draw order that SkillData v1 alignment depends on.
+EXCITE_SEED_OFFSET = 10_000
+# How many samples feed the identifiability block written into the manifest.
+# The cap is applied **per class**, not to a single pooled bucket. Pooling was the first attempt and
+# it was wrong: trials are generated in class order, so a pooled cap of 320 filled entirely from the
+# first 40 `reach` trials and the block labelled "naturalistic_classes" was silently measuring
+# `reach` alone (rank 18/22 rather than 22/22). Caught 2026-08-14 by the rank not matching the depth
+# pass. The regressor is 22 columns wide, so 80 samples x 7 rows per class is ample.
+ID_SAMPLES_PER_TRIAL = 8
+ID_SAMPLES_PER_CLASS = 80
+# The excitation block gets the same *total* budget as the pooled naturalistic block (4 x 80), so
+# the two condition numbers and error bars are computed from the same number of samples and the
+# comparison between them is apples to apples. Judging excite on a quarter of the samples made it
+# look four times worse than it is — error bars scale as 1/sqrt(N).
+ID_SAMPLE_BUDGET = {"__excite__": ID_SAMPLES_PER_CLASS * 4}
+
+
+def _id_budget(motion_class):
+    return ID_SAMPLE_BUDGET.get("__excite__" if motion_class == EXCITATION_CLASS else "",
+                                ID_SAMPLES_PER_CLASS)
 
 
 def _aligned_trials(per_class: int, align_to_n: int, seed: int, fs: float):
@@ -98,8 +121,22 @@ def _aligned_trials(per_class: int, align_to_n: int, seed: int, fs: float):
                 yield mc, local_idx, t, qs, qds, qdds
 
 
+def _excitation_trials(n_trials, seed, fs):
+    """Yield `(class, index, t, q, qd, qdd)` for the excitation class (task 3.15).
+
+    Uses a **separate RNG stream** (`seed + EXCITE_SEED_OFFSET`) rather than the aligned one, so
+    adding, removing or changing the number of excitation trials cannot perturb the naturalistic
+    trials' draw order and therefore cannot break index alignment with SkillData v1.
+    """
+    rng = np.random.default_rng(seed + EXCITE_SEED_OFFSET)
+    for idx in range(n_trials):
+        t, q, qd, qdd = generate_trial(EXCITATION_CLASS, fs=fs, rng=rng)
+        yield EXCITATION_CLASS, idx, t, q, qd, qdd
+
+
 def generate_dynamics_dataset(out, *, per_class=100, align_to_n=1000, seed=0, fs=500.0,
-                              damping=DEFAULT_DAMPING, body_mass=75.0, decimate=1, verbose=False):
+                              damping=DEFAULT_DAMPING, body_mass=75.0, decimate=1,
+                              excite_trials=100, identifiability=True, verbose=False):
     """Write the labelled dynamics slice into `out`. Returns the manifest dict."""
     counts = _class_counts(align_to_n, MOTION_CLASSES)
     if per_class > min(counts):  # validate before creating anything on disk
@@ -113,13 +150,23 @@ def generate_dynamics_dataset(out, *, per_class=100, align_to_n=1000, seed=0, fs
 
     per_class_stats = {mc: {"n_trials": 0, "n_samples": 0, "peak_abs_tau": 0.0,
                             "peak_power_dissipated": 0.0, "energy_dissipated_J": 0.0,
-                            "min_lambda_min": float("inf")} for mc in MOTION_CLASSES}
+                            "min_lambda_min": float("inf")} for mc in ALL_CLASSES}
     trials, n_done = [], 0
+    id_samples = {mc: [] for mc in ALL_CLASSES}
 
-    for mc, idx, t, q, qd, qdd in _aligned_trials(per_class, align_to_n, seed, fs):
+    from itertools import chain
+    sources = chain(_aligned_trials(per_class, align_to_n, seed, fs),
+                    _excitation_trials(excite_trials, seed, fs))
+    for mc, idx, t, q, qd, qdd in sources:
         if decimate > 1:
             t, q, qd, qdd = t[::decimate], q[::decimate], qd[::decimate], qdd[::decimate]
         lab = dyn.label_trajectory(q, qd, qdd)
+
+        if identifiability and len(id_samples[mc]) < _id_budget(mc):
+            # a handful of samples per trial is plenty; the regressor is 22 columns wide
+            lo, hi = int(0.15 * t.size), int(0.9 * t.size)
+            for k in np.linspace(lo, hi - 1, ID_SAMPLES_PER_TRIAL, dtype=int):
+                id_samples[mc].append((q[k], qd[k], qdd[k]))
 
         dt = float(t[1] - t[0])
         e_diss = float(np.trapezoid(lab["power_dissipated"], dx=dt))
@@ -156,6 +203,39 @@ def generate_dynamics_dataset(out, *, per_class=100, align_to_n=1000, seed=0, fs
         if s["n_trials"]:
             s["mean_energy_dissipated_J"] = round(s["energy_dissipated_J"] / s["n_trials"], 6)
 
+    id_block = None
+    if identifiability:
+        if verbose:
+            print("  computing identifiability block...", flush=True)
+        _nat = [smp for mc in MOTION_CLASSES for smp in id_samples[mc]]
+        # one noise level for all three blocks, so they are comparable
+        _sigma = float(f"{0.01 * _rms_torque(dyn, _nat):.6g}")
+        id_block = {
+            "what_this_is": (
+                "Which of this dataset's own parameters are actually recoverable from it. A "
+                "dataset that carries a 'true B' without saying whether B is measurable from its "
+                "own trials is a trap: tasks 5.8/5.9 would report a recovered value for joints "
+                "the data contains no information about. Added by task 3.15."
+            ),
+            "naturalistic_classes": damping_error_bars(dyn, _nat, sigma_abs=_sigma),
+            EXCITATION_CLASS: (damping_error_bars(dyn, id_samples[EXCITATION_CLASS],
+                                                  sigma_abs=_sigma)
+                               if id_samples[EXCITATION_CLASS] else None),
+            "combined": damping_error_bars(
+                dyn, _nat + id_samples[EXCITATION_CLASS], sigma_abs=_sigma),
+            "shared_torque_noise_Nm": _sigma,
+            "sampled_per_class": {mc: len(id_samples[mc]) for mc in ALL_CLASSES},
+            "reading": (
+                "relative_error_bar is std(b_hat_j)/b_true_j at the stated torque noise. Below "
+                "~0.2 the joint's damping is measurable; at 1.0 the error bar equals the value; "
+                "above 1.0 the estimate is noise. Filter Phase-5 claims on this. "
+                "Use the 'combined' block: the excitation class rescues the two joints the "
+                "naturalistic classes cannot see at all, but wrist_rotate and throw drive the "
+                "distal joints harder than a balanced excitation does, so neither set dominates "
+                "the other joint-by-joint and the union beats both."
+            ),
+        }
+
     manifest = {
         "format_version": FORMAT_VERSION,
         "purpose": (
@@ -172,6 +252,8 @@ def generate_dynamics_dataset(out, *, per_class=100, align_to_n=1000, seed=0, fs
             "decimate": decimate,
             "per_class": per_class,
             "align_to_n": align_to_n,
+            "excite_trials": excite_trials,
+            "excite_seed": seed + EXCITE_SEED_OFFSET,
             "arm": "human_arm_7dof",
             "body_mass_kg": body_mass,
             "created_utc": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
@@ -192,6 +274,7 @@ def generate_dynamics_dataset(out, *, per_class=100, align_to_n=1000, seed=0, fs
                 "runs the other way."
             ),
         },
+        "identifiability": id_block,
         "anthropometry": {
             "source": ("de Leva, P. (1996), J. Biomech. 29(9):1223-1230, "
                        "doi:10.1016/0021-9290(95)00178-6 — adjusted Zatsiorsky-Seluyanov "
@@ -229,11 +312,81 @@ def generate_dynamics_dataset(out, *, per_class=100, align_to_n=1000, seed=0, fs
         ),
         "n_trials": len(trials),
         "motion_classes": list(MOTION_CLASSES),
+        "excitation_class": {
+            "name": EXCITATION_CLASS,
+            "n_trials": excite_trials,
+            "why": (
+                "A finite-Fourier-series trajectory driving all 7 joints (task 3.15). It is an "
+                "instrument, not a motion anyone performs, and it is deliberately NOT a member of "
+                "motion_classes: those four are naturalistic and their per-class statistics would "
+                "be contaminated by it, and MOTION_CLASSES also drives the RNG draw order that "
+                "SkillData v1 index alignment depends on. Drawn from a separate RNG stream "
+                "(seed + 10000) for the same reason."
+            ),
+            "caveat": (
+                "Unlike the four naturalistic classes this trajectory does NOT start and end at "
+                "rest, so momentum and kinetic energy are non-zero at both endpoints. Anything "
+                "asserting rest endpoints must exclude it."
+            ),
+        },
         "per_class": per_class_stats,
         "trials": trials,
     }
     with (out / "manifest.json").open("w") as fh:
         json.dump(manifest, fh, indent=2)
+    return manifest
+
+
+def _rms_torque(dyn, samples):
+    """RMS of the linearised torque over `samples` — the reference level for the noise sigma."""
+    from analysis.identifiability import _theta0, build_Y
+
+    theta = np.concatenate([_theta0(dyn), np.diag(dyn.B)])
+    return float(np.sqrt(((build_Y(dyn, samples) @ theta) ** 2).mean()))
+
+
+def recompute_identifiability(out, *, body_mass=None, damping=None):
+    """Recompute the manifest's identifiability block from an already-written slice.
+
+    The block is a property of the trajectories, not of the labelling, so it can be refreshed
+    without paying for another full pass of inverse dynamics. `damping` and `body_mass` default to
+    whatever the existing manifest recorded, so the recomputation describes the dataset on disk
+    rather than a different arm.
+    """
+    out = Path(out)
+    manifest = json.loads((out / "manifest.json").read_text())
+    damping = tuple(manifest["true_damping"]["B_diagonal_Nms_per_rad"]) if damping is None else damping
+    body_mass = manifest["generator"]["body_mass_kg"] if body_mass is None else body_mass
+    dyn = human_arm_7dof_dynamics(body_mass=body_mass, damping=damping)
+
+    buckets = {mc: [] for mc in ALL_CLASSES}
+    for entry in manifest["trials"]:
+        mc = entry["motion_class"]
+        if len(buckets[mc]) >= _id_budget(mc):
+            continue
+        z = np.load(out / entry["file"])
+        T = z["t"].size
+        lo, hi = int(0.15 * T), int(0.9 * T)
+        for k in np.linspace(lo, hi - 1, ID_SAMPLES_PER_TRIAL, dtype=int):
+            buckets[mc].append((z["q"][k].astype(float), z["qd"][k].astype(float),
+                                z["qdd"][k].astype(float)))
+
+    natural = [smp for mc in MOTION_CLASSES for smp in buckets[mc]]
+    sigma = float(f"{0.01 * _rms_torque(dyn, natural):.6g}")
+    manifest["identifiability"] = {
+        "what_this_is": manifest.get("identifiability", {}).get("what_this_is") or (
+            "Which of this dataset's own parameters are actually recoverable from it."),
+        "naturalistic_classes": damping_error_bars(dyn, natural, sigma_abs=sigma),
+        EXCITATION_CLASS: (damping_error_bars(dyn, buckets[EXCITATION_CLASS], sigma_abs=sigma)
+                           if buckets[EXCITATION_CLASS] else None),
+        "combined": damping_error_bars(
+            dyn, natural + buckets[EXCITATION_CLASS], sigma_abs=sigma),
+        "shared_torque_noise_Nm": sigma,
+        "sampled_per_class": {mc: len(buckets[mc]) for mc in ALL_CLASSES},
+        "reading": manifest.get("identifiability", {}).get("reading") or (
+            "relative_error_bar is std(b_hat_j)/b_true_j at the stated torque noise."),
+    }
+    (out / "manifest.json").write_text(json.dumps(manifest, indent=2))
     return manifest
 
 
@@ -245,12 +398,28 @@ def _print_summary(manifest):
     print(f"  limb mass     = {manifest['anthropometry']['total_limb_mass_kg']} kg (de Leva 1996 male)")
     print(f"  {'class':14s} {'trials':>6s} {'peak|tau|':>10s} {'peak P_diss':>12s} "
           f"{'mean E_diss':>12s} {'min lam(M)':>11s}")
-    for mc in manifest["motion_classes"]:
+    classes = list(manifest["motion_classes"])
+    if manifest.get("excitation_class"):
+        classes.append(manifest["excitation_class"]["name"])
+    for mc in classes:
         s = manifest["per_class"][mc]
         if not s["n_trials"]:
             continue
         print(f"  {mc:14s} {s['n_trials']:6d} {s['peak_abs_tau']:9.3f}N {s['peak_power_dissipated']:11.3f}W "
               f"{s.get('mean_energy_dissipated_J', 0.0):11.4f}J {s['min_lambda_min']:11.2e}")
+
+    idb = manifest.get("identifiability")
+    if idb:
+        print("\n  damping identifiability — relative error bar on B at 1% torque noise")
+        print(f"  {'trajectories':16s} {'cond(Y)':>10s} {'rank':>6s} {'worst joint':>16s} {'worst':>8s}")
+        for key, lbl in (("naturalistic_classes", "naturalistic"), (EXCITATION_CLASS, "excite"),
+                         ("combined", "combined")):
+            blk = idb.get(key)
+            if not blk:
+                continue
+            print(f"  {lbl:16s} {blk['condition_number']:10.2e} "
+                  f"{blk['regressor_rank']:3d}/{blk['regressor_cols']:<2d} "
+                  f"{blk['worst_joint']:>16s} {blk['worst_relative_error_bar']:7.1%}")
 
 
 def main(argv=None):
@@ -266,11 +435,24 @@ def main(argv=None):
     ap.add_argument("--body-mass", type=float, default=75.0, help="subject body mass (kg)")
     ap.add_argument("--damping", type=float, nargs=7, default=list(DEFAULT_DAMPING),
                     help="the 7 diagonal entries of B [N m s/rad] — recorded in the manifest")
+    ap.add_argument("--excite-trials", type=int, default=100,
+                    help="finite-Fourier excitation trials appended to the naturalistic ones (3.15)")
+    ap.add_argument("--no-identifiability", action="store_true",
+                    help="skip the manifest's identifiability block (it costs ~30 s)")
+    ap.add_argument("--identifiability-only", action="store_true",
+                    help="recompute only the manifest's identifiability block from an existing slice")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args(argv)
+
+    if a.identifiability_only:
+        manifest = recompute_identifiability(a.out)
+        _print_summary(manifest)
+        return manifest
     manifest = generate_dynamics_dataset(
         a.out, per_class=a.per_class, align_to_n=a.align_to_n, seed=a.seed, fs=a.fs,
-        damping=tuple(a.damping), body_mass=a.body_mass, decimate=a.decimate, verbose=a.verbose)
+        damping=tuple(a.damping), body_mass=a.body_mass, decimate=a.decimate,
+        excite_trials=a.excite_trials, identifiability=not a.no_identifiability,
+        verbose=a.verbose)
     _print_summary(manifest)
     return manifest
 

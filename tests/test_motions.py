@@ -62,3 +62,99 @@ def test_adapter_sets_motion_class_and_validates():
         assert validate(rec) is True
         assert rec["session"]["motion_class"] == mc
         assert set(rec["phase_labels"]) <= {"prep", "active", "settle"}
+
+
+# --------------------------------------------------------------------------- #
+# The excitation class (task 3.15)
+# --------------------------------------------------------------------------- #
+def test_excitation_is_not_a_member_of_motion_classes():
+    """Load-bearing separation, not cosmetic.
+
+    `MOTION_CLASSES` drives `_class_counts()` in both dataset generators, so a fifth member would
+    change `_class_counts(1000, ...)` from [250]*4 to [200]*5, change the RNG draw order, and
+    silently break the dynamics slice's index alignment with the committed SkillData v1 dataset —
+    invalidating the Phase 4 fusion numbers measured on it.
+    """
+    from sim.motions import ALL_CLASSES, EXCITATION_CLASS, MOTION_CLASSES
+
+    assert MOTION_CLASSES == ("reach", "lift", "wrist_rotate", "throw")
+    assert EXCITATION_CLASS not in MOTION_CLASSES
+    assert ALL_CLASSES == MOTION_CLASSES + (EXCITATION_CLASS,)
+
+
+def test_excitation_drives_every_joint():
+    """The single property the naturalistic classes lack, and the whole point of the class."""
+    from sim.motions import EXCITATION_CLASS
+
+    _t, _q, qd, _qdd = generate_trial(EXCITATION_CLASS, fs=500.0, rng=np.random.default_rng(0))
+    rms = np.sqrt((qd**2).mean(axis=0))
+    assert (rms > 0.1).all(), f"every joint must move; got {rms.round(3)}"
+    assert rms.max() / rms.min() < 5.0, (
+        f"excitation must be roughly balanced across joints (the naturalistic classes are 43x "
+        f"skewed); got {rms.max() / rms.min():.1f}x"
+    )
+
+
+def test_excitation_derivatives_are_analytic():
+    """qd and qdd must be the exact derivatives, matching the exactness the rest of `sim` promises."""
+    from sim.motions import EXCITATION_CLASS
+
+    fs = 2000.0
+    _t, q, qd, qdd = generate_trial(EXCITATION_CLASS, fs=fs, rng=np.random.default_rng(1))
+    dt = 1.0 / fs
+    assert np.abs(np.gradient(q, dt, axis=0)[5:-5] - qd[5:-5]).max() / np.abs(qd).max() < 1e-5
+    assert np.abs(np.gradient(qd, dt, axis=0)[5:-5] - qdd[5:-5]).max() / np.abs(qdd).max() < 1e-5
+
+
+def test_excitation_is_reproducible_and_varies_between_trials():
+    from sim.motions import EXCITATION_CLASS
+
+    a = generate_trial(EXCITATION_CLASS, rng=np.random.default_rng(3))[1]
+    b = generate_trial(EXCITATION_CLASS, rng=np.random.default_rng(3))[1]
+    assert np.array_equal(a, b), "same seed must give the same trial"
+    rng = np.random.default_rng(4)
+    c = generate_trial(EXCITATION_CLASS, rng=rng)[1]
+    d = generate_trial(EXCITATION_CLASS, rng=rng)[1]
+    assert not np.allclose(c, d), "consecutive draws must differ, or the trials do not span space"
+
+
+def test_excitation_does_not_start_or_end_at_rest():
+    """Documented difference from the naturalistic classes — anything assuming rest must exclude it."""
+    from sim.motions import EXCITATION_CLASS
+
+    _t, _q, qd, _qdd = generate_trial(EXCITATION_CLASS, rng=np.random.default_rng(5))
+    assert np.abs(qd[0]).max() > 1e-3
+    assert np.abs(qd[-1]).max() > 1e-3
+
+
+def test_excitation_parameters_are_honoured():
+    from sim.motions import EXCITATION_CLASS, excitation_trial
+
+    t, _q, qd, _qdd = excitation_trial(fs=100.0, rng=np.random.default_rng(6), dur=2.0)
+    assert t.size == 200
+    small = excitation_trial(fs=200.0, rng=np.random.default_rng(7), amp=0.05)[2]
+    large = excitation_trial(fs=200.0, rng=np.random.default_rng(7), amp=0.50)[2]
+    assert np.abs(large).max() > 5 * np.abs(small).max()
+    # dispatch through generate_trial carries the keywords
+    t2 = generate_trial(EXCITATION_CLASS, fs=100.0, rng=np.random.default_rng(6), dur=2.0)[0]
+    assert np.array_equal(t, t2)
+
+
+def test_excitation_rejects_nonsense_parameters():
+    from sim.motions import excitation_trial
+
+    with pytest.raises(ValueError, match="n_harm"):
+        excitation_trial(n_harm=0)
+    for bad in ({"dur": 0.0}, {"f_base": -1.0}, {"amp": 0.0}):
+        with pytest.raises(ValueError, match="positive"):
+            excitation_trial(**bad)
+
+
+def test_naturalistic_classes_reject_excitation_keywords():
+    with pytest.raises(TypeError, match="takes no extra parameters"):
+        generate_trial("reach", n_harm=3)
+
+
+def test_unknown_class_names_the_full_set():
+    with pytest.raises(ValueError, match="excite"):
+        generate_trial("cartwheel")
