@@ -7,7 +7,7 @@
 
 PY := uv run python
 
-.PHONY: all sync synthetic fusion models figures paper test clean help
+.PHONY: all sync synthetic dynamics fusion models figures paper test clean help
 
 help:  ## list targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -20,6 +20,9 @@ sync:  ## install the locked dependency set into the uv-managed venv
 
 synthetic:  ## Phase 3: generate + export the synthetic SkillData v1 dataset (task 3.9)
 	$(PY) -m skilldata.generate_synthetic --out data/processed --n 1000
+
+dynamics:  ## Phase 3: dynamics ground-truth slice — q,qd,p,H,tau + the true B (task 3.14)
+	$(PY) -m skilldata.generate_dynamics --out data/processed/dynamics --per-class 100
 
 fusion:  ## Phase 4: run Madgwick + EKF, compute RMS orientation error
 	$(PY) -m fusion.run_validation --data data/processed --figures paper/figures
